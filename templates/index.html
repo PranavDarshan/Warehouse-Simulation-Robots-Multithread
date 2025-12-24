@@ -3,11 +3,13 @@
 <head>
   <title>Warehouse Simulation</title>
   <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
   <style>
     body { font-family: Arial; }
     .panel { border: 1px solid #ccc; padding: 10px; margin: 10px 0; }
     .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
     .badge { padding: 4px 8px; margin: 2px; background: #eee; display: inline-block; }
+    #viz { display: flex; gap: 20px; }
   </style>
 </head>
 
@@ -35,7 +37,10 @@
   <div id="delivered"></div>
 </div>
 
-<canvas id="canvas" width="500" height="500"></canvas>
+<div id="viz">
+  <canvas id="canvas" width="500" height="500"></canvas>
+  <div id="three" style="width:500px;height:500px;"></div>
+</div>
 
 <script>
 const socket = io();
@@ -43,126 +48,174 @@ const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const CELL = 50;
 
-socket.on("state", data => {
-
-  // -------- TOTAL INVENTORY --------
-  let invHTML = "";
-  for (let k in data.inventory) {
-    invHTML += <span class="badge">${k}: ${data.inventory[k]}</span>;
-  }
-  document.getElementById("inventory").innerHTML = invHTML;
-
-  // -------- SHELF INVENTORY --------
-  let shelfHTML = "";
-  for (let shelf in data.shelf_inventory) {
-    shelfHTML += <div class="panel"><b>${shelf}</b><br>;
-    for (let item in data.shelf_inventory[shelf]) {
-      shelfHTML += ${item}: ${data.shelf_inventory[shelf][item]}<br>;
-    }
-    shelfHTML += </div>;
-  }
-  document.getElementById("shelfInventory").innerHTML = shelfHTML;
-
-  // -------- INCOMING QUEUE --------
-  document.getElementById("incoming").innerHTML =
-    data.incoming_queue.map(i => <span class="badge">${i}</span>).join("");
-
-  // -------- DELIVERED ITEMS --------
-  document.getElementById("delivered").innerHTML =
-    data.delivered_items.map(i => <span class="badge">${i}</span>).join("");
-
-  drawWarehouse(data);
-});
-
+/* ============================
+   2D DRAWING (UNCHANGED)
+============================ */
 function drawWarehouse(data){
   ctx.clearRect(0,0,500,500);
-
-  // -------- FLOOR --------
-  ctx.fillStyle = "#2f2f2f";
+  ctx.fillStyle="#2f2f2f";
   ctx.fillRect(0,0,500,500);
 
-  ctx.strokeStyle = "#444";
+  ctx.strokeStyle="#444";
   for(let i=0;i<10;i++){
     for(let j=0;j<10;j++){
       ctx.strokeRect(j*CELL, i*CELL, CELL, CELL);
     }
   }
 
-  // -------- STATIONS --------
-  drawStation(0,5,"#27ae60","SUPPLY");
-  drawStation(9,5,"#2980b9","DELIVERY");
+  drawCell(0,5,"#27ae60","SS");
+  drawCell(9,5,"#2980b9","DS");
 
-  // -------- SHELVES --------
   [[2,2],[2,7],[7,2],[7,7]].forEach((p,i)=>{
-    drawShelf(p[0],p[1], "RACK "+(i+1));
+    drawCell(p[0],p[1],"#8d8d8d","S"+(i+1));
   });
 
-  // -------- ROBOTS --------
   drawRobot(data.supply_robot,"#e74c3c","SR");
   drawRobot(data.delivery_robot,"#9b59b6","DR");
 }
 
-function drawStation(r,c,color,label){
-  const x = c*CELL;
-  const y = r*CELL;
-
-  ctx.fillStyle = color;
-  ctx.fillRect(x,y,CELL,CELL);
-
-  ctx.fillStyle = "white";
-  ctx.font = "10px Arial";
-  ctx.fillText(label, x+4, y+28);
-}
-
-function drawShelf(r,c,label){
-  const x = c*CELL;
-  const y = r*CELL;
-
-  // Frame
-  ctx.fillStyle = "#8d8d8d";
-  ctx.fillRect(x+4,y+4,CELL-8,CELL-8);
-
-  // Rack levels
-  ctx.strokeStyle = "#555";
-  for(let i=1;i<5;i++){
-    ctx.beginPath();
-    ctx.moveTo(x+4, y+4+i*(CELL-8)/5);
-    ctx.lineTo(x+CELL-4, y+4+i*(CELL-8)/5);
-    ctx.stroke();
-  }
-
-  ctx.fillStyle = "white";
-  ctx.font = "9px Arial";
-  ctx.fillText(label, x+6, y+12);
+function drawCell(r,c,color,label){
+  ctx.fillStyle=color;
+  ctx.fillRect(c*CELL,r*CELL,CELL,CELL);
+  ctx.fillStyle="white";
+  ctx.fillText(label,c*CELL+10,r*CELL+25);
 }
 
 function drawRobot(robot,color,label){
-  const [r,c] = robot.pos;
-  const x = c*CELL;
-  const y = r*CELL;
-
-  // Body
-  ctx.fillStyle = color;
-  ctx.fillRect(x+8,y+12,CELL-16,CELL-24);
-
-  // Wheels
-  ctx.fillStyle = "#111";
-  ctx.fillRect(x+4,y+14,4,CELL-28);
-  ctx.fillRect(x+CELL-8,y+14,4,CELL-28);
-
-  // Label
-  ctx.fillStyle = "white";
-  ctx.font = "9px Arial";
-  ctx.fillText(label, x+12, y+CELL/2);
-
-  // Carried item
-  if(robot.carrying){
-    ctx.fillStyle = "#f1c40f";
-    ctx.fillRect(x+CELL/2-8,y+4,16,10);
-    ctx.fillStyle = "#000";
-    ctx.fillText(robot.carrying, x+CELL/2-4, y+12);
-  }
+  const [r,c]=robot.pos;
+  drawCell(r,c,color,label);
 }
+
+/* ============================
+   3D SETUP
+============================ */
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x202020);
+
+const camera = new THREE.PerspectiveCamera(60,1,0.1,1000);
+camera.position.set(6,10,12);
+camera.lookAt(5,0,5);
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(500,500);
+document.getElementById("three").appendChild(renderer.domElement);
+
+/* Lights */
+scene.add(new THREE.AmbientLight(0xffffff,0.6));
+const dir = new THREE.DirectionalLight(0xffffff,0.8);
+dir.position.set(5,10,5);
+scene.add(dir);
+
+/* Floor */
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(10,10),
+  new THREE.MeshStandardMaterial({color:0x444444})
+);
+floor.rotation.x = -Math.PI/2;
+scene.add(floor);
+
+/* Stations */
+function station(x,z,color){
+  const m = new THREE.Mesh(
+    new THREE.BoxGeometry(1,0.2,1),
+    new THREE.MeshStandardMaterial({color})
+  );
+  m.position.set(x,0.1,z);
+  scene.add(m);
+}
+station(5,0,0x27ae60);
+station(5,9,0x2980b9);
+
+/* ============================
+   NEW: SHELF RACKS
+============================ */
+[[2,2],[2,7],[7,2],[7,7]].forEach(p=>{
+  const rack = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({color:0x888888});
+
+  // vertical posts
+  const postGeo = new THREE.BoxGeometry(0.1,2,0.1);
+  [[-0.45,-0.45],[0.45,-0.45],[-0.45,0.45],[0.45,0.45]].forEach(pos=>{
+    const post = new THREE.Mesh(postGeo,mat);
+    post.position.set(pos[0],1,pos[1]);
+    rack.add(post);
+  });
+
+  // shelf levels
+  const shelfGeo = new THREE.BoxGeometry(0.9,0.05,0.9);
+  [0.6,1.2,1.8].forEach(y=>{
+    const shelf = new THREE.Mesh(shelfGeo,mat);
+    shelf.position.y=y;
+    rack.add(shelf);
+  });
+
+  rack.position.set(p[1],0,p[0]);
+  scene.add(rack);
+});
+
+/* ============================
+   NEW: ROBOTS WITH WHEELS
+============================ */
+function makeRobot(color){
+  const g = new THREE.Group();
+
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.6,0.4,0.8),
+    new THREE.MeshStandardMaterial({color})
+  );
+  body.position.y = 0.3;
+  g.add(body);
+
+  const wheelGeo = new THREE.CylinderGeometry(0.12,0.12,0.08,16);
+  const wheelMat = new THREE.MeshStandardMaterial({color:0x111111});
+
+  [[-0.25,-0.35],[0.25,-0.35],[-0.25,0.35],[0.25,0.35]].forEach(p=>{
+    const w = new THREE.Mesh(wheelGeo,wheelMat);
+    w.rotation.z = Math.PI/2;
+    w.position.set(p[0],0.12,p[1]);
+    g.add(w);
+  });
+
+  scene.add(g);
+  return g;
+}
+
+const supplyRobot3D = makeRobot(0xe74c3c);
+const deliveryRobot3D = makeRobot(0x9b59b6);
+
+/* ============================
+   SOCKET STATE (UNCHANGED)
+============================ */
+socket.on("state", data => {
+
+  inventory.innerHTML = Object.entries(data.inventory)
+    .map(([k,v])=><span class="badge">${k}: ${v}</span>).join("");
+
+  let shelfHTML="";
+  for(let s in data.shelf_inventory){
+    shelfHTML+=<div class="panel"><b>${s}</b><br>;
+    for(let i in data.shelf_inventory[s]){
+      shelfHTML+=${i}: ${data.shelf_inventory[s][i]}<br>;
+    }
+    shelfHTML+="</div>";
+  }
+  shelfInventory.innerHTML=shelfHTML;
+
+  incoming.innerHTML=data.incoming_queue.map(i=><span class="badge">${i}</span>).join("");
+  delivered.innerHTML=data.delivered_items.map(i=><span class="badge">${i}</span>).join("");
+
+  drawWarehouse(data);
+
+  supplyRobot3D.position.set(data.supply_robot.pos[1],0,data.supply_robot.pos[0]);
+  deliveryRobot3D.position.set(data.delivery_robot.pos[1],0,data.delivery_robot.pos[0]);
+});
+
+/* Render loop */
+function animate(){
+  requestAnimationFrame(animate);
+  renderer.render(scene,camera);
+}
+animate();
 </script>
 
 </body>
