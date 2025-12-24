@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Warehouse Simulation</title>
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <style>
+    body { font-family: Arial; }
+    .panel { border: 1px solid #ccc; padding: 10px; margin: 10px 0; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    .badge { padding: 4px 8px; margin: 2px; background: #eee; display: inline-block; }
+  </style>
+</head>
+
+<body>
+
+<h1>Warehouse Dashboard</h1>
+
+<div class="panel">
+  <h3>Total Inventory</h3>
+  <div id="inventory"></div>
+</div>
+
+<div class="panel">
+  <h3>Shelf-wise Inventory</h3>
+  <div id="shelfInventory" class="grid"></div>
+</div>
+
+<div class="panel">
+  <h3>Items Waiting at Supply Station</h3>
+  <div id="incoming"></div>
+</div>
+
+<div class="panel">
+  <h3>Delivered Items</h3>
+  <div id="delivered"></div>
+</div>
+
+<canvas id="canvas" width="500" height="500"></canvas>
+
+<script>
+const socket = io();
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const CELL = 50;
+
+socket.on("state", data => {
+
+  // -------- TOTAL INVENTORY --------
+  let invHTML = "";
+  for (let k in data.inventory) {
+    invHTML += <span class="badge">${k}: ${data.inventory[k]}</span>;
+  }
+  document.getElementById("inventory").innerHTML = invHTML;
+
+  // -------- SHELF INVENTORY --------
+  let shelfHTML = "";
+  for (let shelf in data.shelf_inventory) {
+    shelfHTML += <div class="panel"><b>${shelf}</b><br>;
+    for (let item in data.shelf_inventory[shelf]) {
+      shelfHTML += ${item}: ${data.shelf_inventory[shelf][item]}<br>;
+    }
+    shelfHTML += </div>;
+  }
+  document.getElementById("shelfInventory").innerHTML = shelfHTML;
+
+  // -------- INCOMING QUEUE --------
+  document.getElementById("incoming").innerHTML =
+    data.incoming_queue.map(i => <span class="badge">${i}</span>).join("");
+
+  // -------- DELIVERED ITEMS --------
+  document.getElementById("delivered").innerHTML =
+    data.delivered_items.map(i => <span class="badge">${i}</span>).join("");
+
+  drawWarehouse(data);
+});
+
+function drawWarehouse(data){
+  ctx.clearRect(0,0,500,500);
+
+  // -------- FLOOR --------
+  ctx.fillStyle = "#2f2f2f";
+  ctx.fillRect(0,0,500,500);
+
+  ctx.strokeStyle = "#444";
+  for(let i=0;i<10;i++){
+    for(let j=0;j<10;j++){
+      ctx.strokeRect(j*CELL, i*CELL, CELL, CELL);
+    }
+  }
+
+  // -------- STATIONS --------
+  drawStation(0,5,"#27ae60","SUPPLY");
+  drawStation(9,5,"#2980b9","DELIVERY");
+
+  // -------- SHELVES --------
+  [[2,2],[2,7],[7,2],[7,7]].forEach((p,i)=>{
+    drawShelf(p[0],p[1], "RACK "+(i+1));
+  });
+
+  // -------- ROBOTS --------
+  drawRobot(data.supply_robot,"#e74c3c","SR");
+  drawRobot(data.delivery_robot,"#9b59b6","DR");
+}
+
+function drawStation(r,c,color,label){
+  const x = c*CELL;
+  const y = r*CELL;
+
+  ctx.fillStyle = color;
+  ctx.fillRect(x,y,CELL,CELL);
+
+  ctx.fillStyle = "white";
+  ctx.font = "10px Arial";
+  ctx.fillText(label, x+4, y+28);
+}
+
+function drawShelf(r,c,label){
+  const x = c*CELL;
+  const y = r*CELL;
+
+  // Frame
+  ctx.fillStyle = "#8d8d8d";
+  ctx.fillRect(x+4,y+4,CELL-8,CELL-8);
+
+  // Rack levels
+  ctx.strokeStyle = "#555";
+  for(let i=1;i<5;i++){
+    ctx.beginPath();
+    ctx.moveTo(x+4, y+4+i*(CELL-8)/5);
+    ctx.lineTo(x+CELL-4, y+4+i*(CELL-8)/5);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = "white";
+  ctx.font = "9px Arial";
+  ctx.fillText(label, x+6, y+12);
+}
+
+function drawRobot(robot,color,label){
+  const [r,c] = robot.pos;
+  const x = c*CELL;
+  const y = r*CELL;
+
+  // Body
+  ctx.fillStyle = color;
+  ctx.fillRect(x+8,y+12,CELL-16,CELL-24);
+
+  // Wheels
+  ctx.fillStyle = "#111";
+  ctx.fillRect(x+4,y+14,4,CELL-28);
+  ctx.fillRect(x+CELL-8,y+14,4,CELL-28);
+
+  // Label
+  ctx.fillStyle = "white";
+  ctx.font = "9px Arial";
+  ctx.fillText(label, x+12, y+CELL/2);
+
+  // Carried item
+  if(robot.carrying){
+    ctx.fillStyle = "#f1c40f";
+    ctx.fillRect(x+CELL/2-8,y+4,16,10);
+    ctx.fillStyle = "#000";
+    ctx.fillText(robot.carrying, x+CELL/2-4, y+12);
+  }
+}
+</script>
+
+</body>
+</html>
