@@ -20,7 +20,11 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 # ----------------------------
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("dashboard.html")
+
+@app.route("/3d")
+def warehouse_3d():
+    return render_template("warehouse_3d.html")
 
 # ----------------------------
 # Warehouse State
@@ -162,15 +166,6 @@ def delivery_robot_thread():
                     break
             if found:
                 break
-
-def inventory_summary():
-    inv = {"A": 0, "B": 0, "C": 0}
-    for shelf in shelves:
-        for item in shelf:
-            if item:
-                inv[item] += 1
-    return inv
-
 
 def inventory_summary():
     inv = {"A": 0, "B": 0, "C": 0}
