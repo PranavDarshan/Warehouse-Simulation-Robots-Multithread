@@ -11,7 +11,7 @@ eventlet.monkey_patch()
 # ----------------------------
 # Flask + SocketIO Setup
 # ----------------------------
-app = Flask(_name_)
+app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
 
@@ -20,41 +20,50 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 # ----------------------------
 @app.route("/")
 def index():
-    return render_template("dashboard.html")
-
-@app.route("/3d")
-def warehouse_3d():
-    return render_template("warehouse_3d.html")
+    return render_template("index.html")
 
 # ----------------------------
 # Warehouse State
 # ----------------------------
-GRID_SIZE = 10
+# larger grid to demonstrate more complex layouts
+GRID_SIZE = 15
 
-shelves = [[None]*5 for _ in range(4)]
+# create a more complex shelf layout: 12 shelves with 6 slots each
+NUM_SHELVES = 12
+SLOTS_PER_SHELF = 6
+shelves = [[None] * SLOTS_PER_SHELF for _ in range(NUM_SHELVES)]
+
+# explicit shelf positions (row, col) scattered across the grid
 shelf_positions = {
-    0: (2, 2),
-    1: (2, 7),
-    2: (7, 2),
-    3: (7, 7)
+    0: (3, 2),   1: (3, 5),   2: (3, 8),   3: (3, 11),
+    4: (7, 2),   5: (7, 5),   6: (7, 8),   7: (7, 11),
+    8: (11, 2),  9: (11, 5), 10: (11, 8), 11: (11, 11)
 }
 
-SUPPLY_STATION = (0, 5)
-DELIVERY_STATION = (9, 5)
+SUPPLY_STATION = (0, 7)
+DELIVERY_STATION = (14, 7)
 
-supply_robot = {"pos": [0, 5], "carrying": None}
-delivery_robot = {"pos": [9, 5], "carrying": None}
+supply_robot = {"pos": [0, 7], "carrying": None}
+delivery_robot = {"pos": [14, 7], "carrying": None}
 
 
 incoming_supply_queue = []
 delivery_order_queue = []
 delivered_items = []
-all_orders = [] 
+all_orders = []
 
 ITEMS = ["A", "B", "C"]
 arrival_rates = {"A": 0.5, "B": 0.3, "C": 0.2}
 
 lock = threading.Lock()
+
+# seed some initial stock to show up in visualization
+for _ in range(20):
+    s = random.randrange(NUM_SHELVES)
+    slot = random.randrange(SLOTS_PER_SHELF)
+    if shelves[s][slot] is None:
+        shelves[s][slot] = random.choice(ITEMS)
+
 
 # ----------------------------
 # Utility
@@ -67,24 +76,53 @@ def emit_state():
         "delivered_items": delivered_items.copy(),
         "supply_robot": supply_robot,
         "delivery_robot": delivery_robot,
-        "shelves": shelves
+        "shelves": shelves,
+        "shelf_positions": shelf_positions,   # send server's shelf positions
+        "supply_station": SUPPLY_STATION,
+        "delivery_station": DELIVERY_STATION,
+        "grid_size": GRID_SIZE
     })
 
 
-
 def move_robot(robot, target):
-    while tuple(robot["pos"]) != target:
+    # target expected as (row, col) or [row, col]
+    tx, ty = target
+    while tuple(robot["pos"]) != (tx, ty):
         x, y = robot["pos"]
-        tx, ty = target
 
-        if x < tx: x += 1
-        elif x > tx: x -= 1
-        elif y < ty: y += 1
-        elif y > ty: y -= 1
+        if x < tx:
+            x += 1
+        elif x > tx:
+            x -= 1
+        elif y < ty:
+            y += 1
+        elif y > ty:
+            y -= 1
 
         robot["pos"] = [x, y]
         emit_state()
-        time.sleep(0.5)
+        time.sleep(0.25)
+
+
+def inventory_summary():
+    inv = {"A": 0, "B": 0, "C": 0}
+    for shelf in shelves:
+        for item in shelf:
+            if item:
+                inv[item] += 1
+    return inv
+
+
+def shelf_inventory():
+    result = {}
+    for i, shelf in enumerate(shelves):
+        counts = {"A": 0, "B": 0, "C": 0}
+        for item in shelf:
+            if item:
+                counts[item] += 1
+        result[f"Shelf {i}"] = counts
+    return result
+
 
 # ----------------------------
 # Threads
@@ -99,6 +137,7 @@ def stock_arrival_thread():
                     print("[STOCK]", item)
                     emit_state()
 
+
 def order_thread():
     while True:
         time.sleep(random.uniform(2, 4))
@@ -107,6 +146,7 @@ def order_thread():
             delivery_order_queue.append(item)
             print("[ORDER]", item)
             emit_state()
+
 
 def supply_robot_thread():
     while True:
@@ -117,18 +157,21 @@ def supply_robot_thread():
             item = incoming_supply_queue.pop(0)
 
         placed = False
-        for s in range(4):
-            for slot in range(5):
+        # iterate dynamically over shelves and slots
+        for s in range(len(shelves)):
+            for slot in range(len(shelves[s])):
                 if shelves[s][slot] is None:
+                    # go to supply station, pick up, then move to shelf position
                     move_robot(supply_robot, SUPPLY_STATION)
                     supply_robot["carrying"] = item
                     emit_state()
 
-                    move_robot(supply_robot, shelf_positions[s])
+                    target = shelf_positions.get(s, (0, 0))
+                    move_robot(supply_robot, target)
                     with lock:
                         shelves[s][slot] = item
                         supply_robot["carrying"] = None
-                        print("[SUPPLY ROBOT] Stored", item)
+                        print("[SUPPLY ROBOT] Stored", item, "at shelf", s, "slot", slot)
                         emit_state()
                     placed = True
                     break
@@ -145,10 +188,12 @@ def delivery_robot_thread():
             item = delivery_order_queue.pop(0)
 
         found = False
-        for s in range(4):
-            for slot in range(5):
+        # search dynamically across shelves and slots
+        for s in range(len(shelves)):
+            for slot in range(len(shelves[s])):
                 if shelves[s][slot] == item:
-                    move_robot(delivery_robot, shelf_positions[s])
+                    target = shelf_positions.get(s, (0, 0))
+                    move_robot(delivery_robot, target)
                     delivery_robot["carrying"] = item
 
                     with lock:
@@ -167,26 +212,6 @@ def delivery_robot_thread():
             if found:
                 break
 
-def inventory_summary():
-    inv = {"A": 0, "B": 0, "C": 0}
-    for shelf in shelves:
-        for item in shelf:
-            if item:
-                inv[item] += 1
-    return inv
-
-def shelf_inventory():
-    result = {}
-    for i, shelf in enumerate(shelves):
-        counts = {"A": 0, "B": 0, "C": 0}
-        for item in shelf:
-            if item:
-                counts[item] += 1
-        result[f"Shelf {i}"] = counts
-    return result
-
-
-
 
 # ----------------------------
 # Launch Threads
@@ -197,10 +222,12 @@ def start_threads():
     threading.Thread(target=supply_robot_thread, daemon=True).start()
     threading.Thread(target=delivery_robot_thread, daemon=True).start()
 
+
 # ----------------------------
 # Main
 # ----------------------------
-if _name_ == "_main_":
-    print("Starting warehouse simulation...")
+if __name__ == "__main__":
+    print("Starting complex warehouse simulation...")
     start_threads()
     socketio.run(app, host="0.0.0.0", port=5000)
+
